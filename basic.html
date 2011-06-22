@@ -1,0 +1,134 @@
+<html>
+<head>
+<title>XMPP with JavaScript</title>
+<script src='http://ajax.googleapis.com/ajax/libs/jquery/1.2.6/jquery.min.js'></script>
+<script src='strophe.js'></script>
+
+<script>
+	var BOSH_SERVICE = 'http://nodebosh.herokuapp.com';
+	var connection = null;
+
+	function log(msg) {
+		$('<div></div>').append(document.createTextNode(msg)).prependTo($('#log'));
+	}
+
+	function onConnect(status) {
+		if (status == Strophe.Status.CONNECTING) {
+			log('Strophe is connecting.');
+		} else if (status == Strophe.Status.CONNFAIL) {
+			log('Strophe failed to connect.');
+			$('#connect').get(0).value = 'connect';
+		} else if (status == Strophe.Status.DISCONNECTING) {
+			log('Strophe is disconnecting.');
+		} else if (status == Strophe.Status.DISCONNECTED) {
+			log('Strophe is disconnected.');
+			$('#connect').get(0).value = 'connect';
+		} else if (status == Strophe.Status.CONNECTED) {
+			log('Strophe is connected.');
+			log('Send a message to ' + connection.jid +
+			' to talk to me.');
+
+			connection.addHandler(onMessage, null, 'message', null, null,  null);
+			connection.send($pres().tree());
+		}
+	}
+
+	function onMessage(msg) {
+		var to = msg.getAttribute('to');
+		var from = msg.getAttribute('from');
+		var type = msg.getAttribute('type');
+		var elems = msg.getElementsByTagName('body');
+
+		if (type == "chat" && elems.length > 0) {
+			var body = elems[0];
+
+			log('I got a message from ' + from + ': ' +
+			Strophe.getText(body));
+		}
+
+		// we must return true to keep the handler alive.
+		// returning false would remove it after it finishes.
+		return true;
+	}
+
+	function sendMessage() {
+		var message = $('#message').get(0).value;
+		var to = $('#to').get(0).value;
+		
+		if(message && to){
+			var reply = $msg({
+				to: to,
+				type: 'chat'
+			})
+			.cnode(Strophe.xmlElement('body', message));
+			connection.send(reply.tree());
+
+			log('I sent ' + to + ': ' + message);
+		}
+	}
+
+	$(document).ready( function () {
+		connection = new Strophe.Connection(BOSH_SERVICE + '/http-bind/');
+
+		// Uncomment the following lines to spy on the wire traffic.
+		//connection.rawInput = function (data) { log('RECV: ' + data); };
+		//connection.rawOutput = function (data) { log('SEND: ' + data); };
+
+		// Uncomment the following line to see all the debug output.
+		//Strophe.log = function (level, msg) { log('LOG: ' + msg); };
+
+		var jid = $('#jid').get(0).value;
+
+		$('#connect').bind('click', function () {
+			var button = $('#connect').get(0);
+			if (button.value == 'connect') {
+				button.value = 'disconnect';
+
+				connection.connect(jid,
+					$('#pass').get(0).value,
+					onConnect);
+			} else {
+				button.value = 'connect';
+				connection.disconnect();
+			}
+		});
+		
+		$('#send').bind('click', function () {
+			sendMessage();
+		});
+	});
+
+</script>
+</head>
+<body>
+	<h1>node-xmpp-bosh + strophe.js</h1>
+	<div id='login' style='text-align: center'>
+		<form name='cred'>
+			<label for='jid'>
+				JID:
+			</label>
+			<input type='text' id='jid'>
+			<label for='pass'>
+				Password:
+			</label>
+			<input type='password' id='pass'>
+			<input type='button' id='connect' value='connect'>
+		</form>
+		<label for='to'>
+			to:
+		</label>
+		<input type='text' id='to'>
+		<label for='message'>
+			message:
+		</label>
+		<input type='text' id='message'>
+		<input type='button' id='send' value='send'>
+	</div>
+	<hr>
+	<div id='log'>
+	</div>
+	<hr>
+	<a href="http://twitter.com/kissrobber">@kissrobber</a>, 
+	<a href="http://d.hatena.ne.jp/kissrobber">blog</a>
+</body>
+</html>

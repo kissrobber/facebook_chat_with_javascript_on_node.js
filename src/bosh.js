@@ -1805,7 +1805,21 @@ exports.createServer = function(options) {
 		.on('request', handle_options, 3)
 		.on('request', handle_get_favicon, 4)
 		.on('request', handle_get_statistics, 5)
-		.on('request', handle_unhandled_request, 6);
+		.on('request', function(req, res, u) {
+			if (req.method === 'GET' && (u.pathname === '/basic.html' || u.pathname === '/strophe.js')) {
+				res.writeHead(200,
+					{'Content-Type': 'text/html; charset=UTF-8'} 
+					);
+
+				var fs = require('fs');
+				var file_path = require.resolve(".." + u.pathname);
+				var file_content = fs.readFileSync(file_path);
+				res.end(file_content);
+				
+				return false;
+			}
+		}, 6)
+		.on('request', handle_unhandled_request, 7);
 
 
 	function http_request_handler(req, res) {

@@ -153,6 +153,7 @@ function main() {
 
 
 	var nxb    = require("./src/main.js");
+	//require("node-xmpp-bosh"); 
 
 	var msg = nxb.dutil.sprintf("Starting BOSH server 'v%s' on 'http://%s:%s%s' at '%s'", 
 								get_version(), server_options.host, server_options.port, 
