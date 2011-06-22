@@ -77,13 +77,12 @@
 		// Uncomment the following line to see all the debug output.
 		//Strophe.log = function (level, msg) { log('LOG: ' + msg); };
 
-		var jid = $('#jid').get(0).value;
 
 		$('#connect').bind('click', function () {
 			var button = $('#connect').get(0);
 			if (button.value == 'connect') {
 				button.value = 'disconnect';
-
+				var jid = $('#jid').get(0).value;
 				connection.connect(jid,
 					$('#pass').get(0).value,
 					onConnect);
