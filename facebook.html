@@ -87,8 +87,6 @@
 				
 		FB.getLoginStatus(function(response) {
 		  if (response.session) {
-			log("session:" + FB.getSession().session_key + " : " + FB.getSession().secret);
-
 			connection.facebookConnect(
 				FB.getSession().uid + "@chat.facebook.com/test", 
 				onConnect, 
