@@ -1834,7 +1834,7 @@ exports.createServer = function(options) {
 					);
 					
 				var md5 = require('../md5.js');
-				res.end(md5.MD5.hexdigest(u.query.data+ENV['FACEBOOK_API_SECRET']));
+				res.end(md5.MD5.hexdigest(u.query.data+process.env.FACEBOOK_API_SECRET));
 				
 				return false;
 			}
