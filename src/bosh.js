@@ -1808,7 +1808,7 @@ exports.createServer = function(options) {
 		.on('request', function(req, res, u) {
 			if (req.method === 'GET' && (u.pathname === '/basic.html' || u.pathname === '/facebook.html')) {
 				res.writeHead(200,
-					{'Content-Type': 'text/html; charset=UTF-8'} 
+					{'Content-Type': 'text/html; charset=UTF-8'}
 					);
 
 				var fs = require('fs');
@@ -1826,6 +1826,15 @@ exports.createServer = function(options) {
 				var file_path = require.resolve(".." + u.pathname);
 				var file_content = fs.readFileSync(file_path);
 				res.end(file_content);
+				
+				return false;
+			} else if(req.method === 'GET' && (u.pathname === '/sasl_challenge1_fb')){
+				res.writeHead(200,
+					{'Content-Type': 'text/plain; charset=UTF-8'} 
+					);
+					
+				var md5 = require('../md5.js');
+				res.end(md5.MD5.hexdigest(u.query.data+ENV['FACEBOOK_API_SECRET']));
 				
 				return false;
 			}
