@@ -1,11 +1,9 @@
 /*
-    @author: Ruben J Garcia <rubenjgarciab@gmail.com>
-    @version: 1.0
+    most of code is from (https://github.com/javierfigueroa/turedsocial).
     
-    This program is distributed under the terms of the MIT license.
-    Please see the LICENSE file for details.
-
-    Copyright 2006-2008, OGG, LLC
+    modified to remove app_secret from html and javascript
+    
+    MIT license.
 */
 
 /**
@@ -105,12 +103,11 @@ Strophe.Connection.prototype._sasl_challenge1_fb = function (elem)
         responseText += '&call_id=' + (Math.floor(new Date().getTime()/1000));
         responseText += '&method=' + method;
         responseText += '&nonce=' + nonce;
-        responseText += '&session_key=' + this.sessionKey;
+        responseText += '&access_token=' + this.accessToken;
         responseText += '&v=' + '1.0';
-        responseText += '&sig=' + MD5.hexdigest(responseText.replace(/&/g,"")+this.secretKey);
         
         this._sasl_challenge_handler = this._addSysHandler(
-            this._sasl_challenge2_cb.bind(this), null,
+            this._sasl_digest_challenge2_cb.bind(this), null,
             "challenge", null, null);
         this._sasl_success_handler = this._addSysHandler(
             this._sasl_success_cb.bind(this), null,
@@ -247,10 +244,9 @@ Strophe.Connection.prototype._connect_fb = function (req) {
  *      number of connections the server will hold at one time.  This
  *      should almost always be set to 1 (the default).
  *  @param apiKey The API key of our Facebook Application
- *  @param secretKey The secret key of our Facebbok Application
  *  @param sessionKey The actual session key for the user who we are attempting to log in
  */
-Strophe.Connection.prototype.facebookConnect = function (jid, callback, wait, hold, apiKey, secretKey, sessionKey){
+Strophe.Connection.prototype.facebookConnect = function (jid, callback, wait, hold, apiKey, accessToken){
 	this.jid = jid;
     this.connect_callback = callback;
     this.disconnecting = false;
@@ -258,8 +254,7 @@ Strophe.Connection.prototype.facebookConnect = function (jid, callback, wait, ho
     this.authenticated = false;
     this.errors = 0;
     this.apiKey = apiKey;
-    this.secretKey = secretKey;
-    this.sessionKey = sessionKey;
+    this.accessToken = accessToken;
 
     this.wait = wait || this.wait;
     this.hold = hold || this.hold;
@@ -284,7 +279,7 @@ Strophe.Connection.prototype.facebookConnect = function (jid, callback, wait, ho
     this._requests.push(
         new Strophe.Request(body.tree(),
                             this._onRequestStateChange.bind(
-                                this, this._connect_fb.bind(this)),
-                            body.tree().getAttribute("rid")));
+                            this, this._connect_fb.bind(this)),
+                             body.tree().getAttribute("rid")));
     this._throttledRequestHandler();
 };

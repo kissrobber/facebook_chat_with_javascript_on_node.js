@@ -31,38 +31,57 @@ var events = require("events");
 var util   = require('util');
 var dutil  = require('./dutil.js');
 var us     = require('underscore');
+var XmppParser = require('./stream-parser.js').XmppStreamParser;
 
+var path        = require('path');
+var filename    = "[" + path.basename(path.normalize(__filename)) + "]";
+var log         = require('./log.js').getLogger(filename);
 
 var NS_XMPP_TLS =     'urn:ietf:params:xml:ns:xmpp-tls';
 var NS_STREAM =       'http://etherx.jabber.org/streams';
 var NS_XMPP_STREAMS = 'urn:ietf:params:xml:ns:xmpp-streams';
 
 
-function XMPPProxy(xmpp_host, lookup_service, stream_attrs, options, void_star) {
-	this._xmpp_host      = xmpp_host;
-	this._void_star      = void_star;
-	this._lookup_service = lookup_service;
-	this._default_stream_attrs = {
-		'xmlns:stream': 'http://etherx.jabber.org/streams', 
-		xmlns:          'jabber:client',
-		to:             this._xmpp_host, 
-		version:        '1.0'
-	};
+function XMPPProxy(xmpp_host, lookup_service, stream_start_attrs, options, void_star) {
+    this._xmpp_host      = xmpp_host;
 
-	this._max_xmpp_buffer_size = options.max_xmpp_buffer_size || 500000;
+    // This code assumes that void_star will have a
+    // name attribute and a session object that has
+    // a sid attribute. These are used as identifiers
+    // to improve logging. We may choose to get rid of
+    // them later. Don't rely on this behaviour.
 
-	this._no_tls_domains = { };
-	var _ntd = options.no_tls_domains || [ ];
-	_ntd.forEach(function(domain) {
-		this._no_tls_domains[domain] = 1;
-	}.bind(this));
+    this._void_star      = void_star;
+    this._lookup_service = lookup_service;
+    this._default_stream_attrs = {
+        'xmlns:stream': 'http://etherx.jabber.org/streams', 
+        xmlns:          'jabber:client',
+        to:             this._xmpp_host,
+        version:        '1.0'
+    };
 
-	this._buff         = '';
-	this._first        = true;
-	this._is_connected = false;
-	this._terminate_on_connect = false;
+    this.stream_start_attrs = stream_start_attrs || { };
 
-	return this;
+    this._max_xmpp_buffer_size = options.max_xmpp_buffer_size || 500000;
+
+    // Suppress the <stream:stream> tag (stream-restart event) if it
+    // is a response to a STARTTLS request that we (the proxy
+    // initiated).
+    // 
+    // https://github.com/dhruvbird/node-xmpp-bosh/issues/16
+    this._suppress_stream_restart_event = false;
+
+    this._no_tls_domains = { };
+    var _ntd = options.no_tls_domains || [ ];
+    _ntd.forEach(function(domain) {
+        this._no_tls_domains[domain] = 1;
+    }.bind(this));
+
+    this._is_connected = false;
+    this._parser       = new XmppParser();
+    this._terminate_on_connect = false;
+
+    return this;
 }
 
 
@@ -71,276 +90,235 @@ util.inherits(XMPPProxy, events.EventEmitter);
 exports.Proxy = XMPPProxy;
 
 dutil.copy(XMPPProxy.prototype, {
-	_detach_handlers: function() {
-		this._sock.removeAllListeners('connect');
-		this._sock.removeAllListeners('data');
-		this._sock.removeAllListeners('error');
-		this._sock.removeAllListeners('close');
-	}, 
+    _detach_handlers: function() {
+        if (this._lookup_service) {
+            this._lookup_service.removeAllListeners('connect');
+            this._lookup_service.removeAllListeners('error');
+        }
+        this._sock.removeAllListeners('data');
+        this._sock.removeAllListeners('error');
+        this._sock.removeAllListeners('close');
+    }, 
 
-	_attach_handlers: function() {
-		// Ideally, 'connect' and 'close' should be once() listeners
-		// but having them as on() listeners has helped us catch some
-		// nasty bugs, so we let them be.
-		this._sock.on('connect', us.bind(this._on_connect, this));
-		this._sock.on('data',    us.bind(this._on_data, this));
-		this._sock.on('close',   us.bind(this._on_close, this));
-		this._sock.on('error',   dutil.NULL_FUNC);
-	}, 
+    _attach_handlers: function() {
+        // Ideally, 'connect' and 'close' should be once() listeners
+        // but having them as on() listeners has helped us catch some
+        // nasty bugs, so we let them be.
+        if (this._lookup_service) {
+            this._lookup_service.on('connect', us.bind(this._on_connect, this));
+            this._lookup_service.on('error', us.bind(this._on_lookup_error, this));
+        }
+        this._sock.on  ('data',    us.bind(this._on_data, this));
+        this._sock.once('close',   us.bind(this._on_close, this));
+        this._sock.on  ('error',   dutil.NULL_FUNC);
+    }, 
 
-	_starttls: function() {
-		// Vishnu hates 'self'
-		var self = this;
-		this._detach_handlers();
+    _attach_handlers_to_parser: function() {
+        this._parser.on("stanza", this._on_stanza.bind(this));
+        this._parser.on("error", this._on_stream_error.bind(this));
+        this._parser.on("stream-start", this._on_stream_start.bind(this));
+        this._parser.on("stream-restart", this._on_stream_restart.bind(this));
+        this._parser.on("stream-end", this._on_stream_end.bind(this));
+    },
 
-		var ct = require('./starttls.js')(this._sock, { }, function() {
-			// Restart the stream.
-			self.restart();
-	    });
+    _detach_handlers_from_parser: function() {
+        this._parser.removeAllListeners("stanza");
+        this._parser.removeAllListeners("error");
+        this._parser.removeAllListeners("stream-start");
+        this._parser.removeAllListeners("stream-restart");
+        this._parser.removeAllListeners("stream-end");
+    },
 
-	    // The socket is now the cleartext stream
-		this._sock = ct;
+    _starttls: function() {
+        log.trace("%s %s _starttls", this._void_star.session.sid, this._void_star.name);
+        // Vishnu hates 'self' - binding to 'this' _is_ definitely cleaner
+        // var self = this;
+        this._detach_handlers();
 
-		self._attach_handlers();
+        var ct = require('./starttls.js')(this._sock, { }, function() {
+            log.trace("%s %s _starttls - restart the stream", this._void_star.session.sid, this._void_star.name);
+            // Restart the stream
+            this.restart();
+        }.bind(this));
+
+        // The socket is now the cleartext stream
+        this._sock = ct;
+
+        this._attach_handlers();
+    },
+
+    _get_stream_xml_open: function(stream_attrs) {
+        stream_attrs = stream_attrs || { };
+        var _attrs = { };
+        dutil.copy(_attrs, stream_attrs);
+        dutil.extend(_attrs, this._default_stream_attrs);
+        return new ltx.Element('stream:stream', _attrs).toString().replace(/\/>$/, '>');
+    }, 
+
+    _on_stanza: function(stanza) {
+        log.trace("%s %s _on_stanza parsed: %s", this._void_star.session.sid, this._void_star.name, stanza);
+
+        dutil.extend(stanza.attrs, this._stream_attrs);
+
+        // TODO: Check for valid Namespaces too.
+
+        // dutil.log_it("DEBUG", "XMPP PROXY::Is stream:features?", stanza.is('features'));
+        // dutil.log_it("DEBUG", "XMPP PROXY::logging starttls:", stanza.getChild('starttls'));
+
+        if (stanza.is('features') &&
+            stanza.getChild('starttls')) {
+
+            // 
+            // We STARTTLS only if TLS is
+            // [a] required or
+            // [b] the domain we are connecting to is not present in 
+            //     this._no_tls_domains
+            // 
+            var starttls_stanza = stanza.getChild('starttls');
+
+            if (starttls_stanza.getChild('required') || !this._no_tls_domains[this._xmpp_host]) {
+                /* Signal willingness to perform TLS handshake */
+                log.trace("%s %s _on_stanza starttls requested", this._void_star.session.sid, this._void_star.name);
+                var _starttls_request = 
+                    new ltx.Element('starttls', {
+                        xmlns: NS_XMPP_TLS
+                    }).toString();
+                log.trace("%s %s Writing out starttls", this._void_star.session.sid, this._void_star.name);
+                this.send(_starttls_request);
+            }
+            else {
+                stanza.remove(starttls_stanza);
+                this.emit('stanza', stanza, this._void_star);
+            }
+
+        } else if (stanza.is('proceed')) {
+            /* Server is waiting for TLS handshake */
+            this._starttls();
+            this._suppress_stream_restart_event = true;
+        }
+        else {
+            // No it is neither. We just handle it as a normal stanza.
+            this.emit('stanza', stanza, this._void_star);
+        }
+    },
+
+    connect: function() {
+        // console.log(this);
+        this._sock = new net.Stream();
+        this._attach_handlers();
+        this._attach_handlers_to_parser();
+        this._lookup_service.connect(this._sock);
+    },
+
+    restart: function(stream_attrs) {
+        var _ss_open = this._get_stream_xml_open(stream_attrs);
+        this.send(_ss_open);
+        this._parser.restart();
+    },
+
+    terminate: function() {
+        if (this._is_connected) {
+            log.trace("%s %s - terminating", this._void_star.session.sid, this._void_star.name);
+            // Detach the 'data' handler so that we don't get any more events.
+            this._sock.removeAllListeners('data');
+            this._parser.end();
+            this._detach_handlers_from_parser();
+
+            // Write the stream termination tag
+            this.send("</stream:stream>");
+
+            this._is_connected = false;
+
+            // Do NOT detach the 'error' handler since that caused the server 
+            // to crash.
+            //
+            // http://code.google.com/p/node-xmpp-bosh/issues/detail?id=5
+
+            this._sock.end();
+        }
+        else {
+            log.trace("%s %s terminate - will terminate on connect", this._void_star.session.sid, this._void_star.name);
+            this._terminate_on_connect = true;
+        }
+    },
+
+    send: function(data) {
+        if (this._is_connected) {
+            try {
+                this._sock.write(data);
+                log.trace("%s %s Sent: %s", this._void_star.session.sid, this._void_star.name, data);
+            }
+            catch (ex) {
+                this._is_connected = false;
+                log.error("%s %s Couldnot send: %s", this._void_star.session.sid, this._void_star.name, data);
+                // this.on_close(true, ex);
+            }
+        }
+
+    }, 
+
+    _on_connect: function() {
+        log.trace("%s %s connected", this._void_star.session.sid, this._void_star.name);
+
+        this._is_connected = true;
+        delete this._lookup_service;
+
+        if (this._terminate_on_connect) {
+            this.terminate();
+        }
+        else {
+            var _ss_open = this._get_stream_xml_open(this.stream_start_attrs);
+
+            // Always, we connect on behalf of the real client.
+            this.send(_ss_open);
+
+            this.emit('connect', this._void_star);
+        }
+    }, 
+
+    _on_data: function(d) {
+        log.debug("%s %s _on_data RECD: %s", this._void_star.session.sid, this._void_star.name, d);
+        this._parser.parse(d);
+    },
+
+    _on_stream_start: function(attrs) {
+        log.trace("%s %s _on_stream_start: stream started", this._void_star.session.sid, this._void_star.name);
+        this._stream_attrs = { };
+        dutil.copy(this._stream_attrs, attrs, ["xmlns:stream", "xmlns", "version"]);
+    },
+
+    _on_stream_restart: function(attrs, stanza) {
+        log.trace("%s %s _on_stream_restart: stream restarted", this._void_star.session.sid, this._void_star.name);
+        dutil.copy(this._stream_attrs, attrs, ["xmlns:stream", "xmlns", "version"]);
+        if (!this._suppress_stream_restart_event) {
+            this.emit('restart', stanza, this._void_star);
+        }
+        _suppress_stream_restart_event = false;
 	},
 
-	_get_stream_xml_open: function(stream_attrs) {
-		stream_attrs = stream_attrs || { };
-		dutil.extend(stream_attrs, this._default_stream_attrs);
-		return new ltx.Element('stream:stream', stream_attrs).toString().replace(/\/>$/, '>');
-	}, 
+    _on_stream_end: function(attr) {
+        log.trace("%s %s _on_stream_end: stream terminated", this._void_star.session.sid, this._void_star.name);
+        this.terminate();
+    },
 
-	_on_stanza: function(stanza) {
-		// TODO: Check for valid Namespaces too.
+    _on_stream_error: function(error) {
+        log.error("%s %s _on_stream_error - will terminate: %s", this._void_star.session.sid, this._void_star.name, error);
+        this.terminate();
+    },
 
-		// dutil.log_it("DEBUG", "XMPP PROXY::Is stream:features?", stanza.is('features'));
-		// dutil.log_it("DEBUG", "XMPP PROXY::logging starttls:", stanza.getChild('starttls'));
-		if (stanza.is('features') &&
-			stanza.getChild('starttls')) {
+    _close_connection: function(error) {
+        log.trace("%s %s _close_connection error: %s", this._void_star.session.sid, this._void_star.name, error);
+        this.emit('close', error, this._void_star);
+    },
+    
+    _on_close: function(had_error) {
+        had_error = had_error || false;
+        log.trace("%s %s _on_close error: %s", this._void_star.session.sid, this._void_star.name, !!had_error);
+        this._close_connection(had_error ? 'remote-connection-failed' : null);
+    },
 
-			// 
-			// We STARTTLS only if TLS is
-			// [a] required or
-			// [b] the domain we are connecting to is not present in 
-			//     this._no_tls_domains
-			// 
-			var starttls_stanza = stanza.getChild('starttls');
-
-			if (starttls_stanza.getChild('required') || !this._no_tls_domains[this._xmpp_host]) {
-				/* Signal willingness to perform TLS handshake */
-				dutil.log_it("DEBUG", "XMPP PROXY::STARTTLS requested");
-				var _starttls_request = 
-					new ltx.Element('starttls', {
-						xmlns: NS_XMPP_TLS
-					}).toString();
-				dutil.log_it("DEBUG", "XMPP PROXY::Writing out STARTTLS request:", _starttls_request);
-				this.send(_starttls_request);
-			}
-			else {
-				stanza.remove(starttls_stanza);
-				this.emit('stanza', stanza, this._void_star);
-			}
-
-		} else if (stanza.is('proceed')) {
-	        /* Server is waiting for TLS handshake */
-		    this._starttls();
-		}
-		else {
-			// No it is neither. We just handle it as a normal stanza.
-			this.emit('stanza', stanza, this._void_star);
-		}
-	},
-
-	connect: function() {
-		// console.log(this);
-		this._sock = new net.Stream();
-		this._attach_handlers();
-		this._lookup_service.connect(this._sock);
-	},
-
-	restart: function(stream_attrs) {
-		this._buff = '';
-		this._first = true;
-		var _ss_open = this._get_stream_xml_open(stream_attrs);
-
-		this.send(_ss_open);
-	},
-
-	terminate: function() {
-		if (this._is_connected) {
-			// Detach the 'data' handler so that we don't get any more events.
-			this._sock.removeAllListeners('data');
-
-			// Write the stream termination tag
-			this.send("</stream:stream>");
-
-			this._is_connected = false;
-
-			// Do NOT detach the 'error' handler since that caused the server 
-			// to crash.
-			//
-			// http://code.google.com/p/node-xmpp-bosh/issues/detail?id=5
-
-			this._sock.destroy();
-		}
-		else {
-			this._terminate_on_connect = true;
-		}
-	},
-
-	send: function(data) {
-		if (this._is_connected) {
-			try {
-				this._sock.write(data);
-			}
-			catch (ex) {
-				this._is_connected = false;
-				// this.on_close(true, ex);
-			}
-		}
-
-	}, 
-
-	_on_connect: function() {
-		dutil.log_it('DEBUG', 'XMPP PROXY::connected');
-
-		this._is_connected = true;
-
-		if (this._terminate_on_connect) {
-			this.terminate();
-		}
-		else {
-			var _ss_open = this._get_stream_xml_open({ });
-
-			// Always, we connect on behalf of the real client.
-			this.send(_ss_open);
-
-			this.emit('connect', this._void_star);
-		}
-	}, 
-
-	_on_data: function(d) {
-		//
-		// TODO: All this will become *much* cleaner (and faster) if we move 
-		// to a SAX based XML parser instead of using ltx to parse() buffers. 
-		// The current implementation will fail if we get a <stream:stream/> 
-		// packet. The SAX based parser will handle that very well.
-		//
-		dutil.log_it("DEBUG", function() {
-			return dutil.sprintf("XMPP PROXY::received:%s", d.toString('binary'));
-		});
-
-		this._buff += d.toString();
-
-		if (this._first) {
-			// Parse and save attribites from the first response
-			// so that we may replay them in all subsequent responses.
-			var ss_pos = this._buff.search("<stream:stream");
-			if (ss_pos !== -1) {
-				this._buff = this._buff.substring(ss_pos);
-				var gt_pos = this._buff.search(">");
-				if (gt_pos !== -1) {
-					dutil.log_it("DEBUG", "XMPP PROXY::Got stream packet");
-					var _ss_stanza = this._buff.substring(0, gt_pos + 1) + "</stream:stream>";
-					dutil.log_it("DEBUG", "XMPP PROXY::_ss_stanza:", _ss_stanza);
-
-					// Parse _ss_stanza and extract the attributes.
-					var _ss_node = dutil.xml_parse(_ss_stanza);
-					if (_ss_node) {
-						this._stream_attrs = { };
-						dutil.copy(this._stream_attrs, _ss_node.attrs, [
-							"xmlns:stream", "xmlns", "version"
-						]);
-
-						// console.log("_ss_node:", _ss_node);
-						// console.log("stream:stream attrs:", this._stream_attrs);
-					}
-
-					this._buff = this._buff.substring(gt_pos+1);
-
-					// Now that we have the complete <stream:stream> stanza, we can set
-					// this._first to false
-					this._first = false;
-				}
-			}
-		}
-
-		// console.log("buff is:", this._buff);
-		if (!this._buff) {
-			return;
-		}
-
-		var stream_terminated = false;
-		var st_pos = this._buff.indexOf("</stream:stream>");
-		// Check for the </stream:stream> packet
-		if (st_pos !== -1) {
-			stream_terminated = true;
-			this._buff = this._buff.substring(0, st_pos);
-		}
-
-		// Terminate if the buffer becomes too big
-		if (this._buff.length > this._max_xmpp_buffer_size) {
-			dutil.log_it("DEBUG", "XMPP PROXY::Terminating stream due to buffer size violation");
-			stream_terminated = true;
-		}
-
-		try {
-			var tmp = "<stream:stream xmlns:stream='http://etherx.jabber.org/streams' xmlns='jabber:client' version='1.0'>" + 
-				this._buff + 
-				"</stream:stream>";
-			// console.log("TMP:", tmp);
-
-			var node = ltx.parse(tmp);
-
-			// If tmp is not WF-XML, then the following lines will NOT be executed.
-			this._buff = '';
-			// console.log('node:', node);
-
-			var self = this;
-
-			node.children
-			.filter(us.not(us.isString))
-			.forEach(function(stanza) {
-				try {
-					// NULL out the parent otherwise ltx will go crazy when we
-					// assign 'stanza' as the child node of some other parent.
-					stanza.parent = null;
-
-					// Populate the attributes of this packet from those of the 
-					// stream:stream stanza.
-					dutil.copy(stanza.attrs, self._stream_attrs);
-
-					// console.log("self._stream_attrs:", self._stream_attrs);
-
-					dutil.log_it("DEBUG", function() {
-						return [ "XMPP PROXY::Emiting stanza:", stanza.toString() ];
-					});
-					self._on_stanza(stanza);
-				}
-				catch (ex) {
-					dutil.log_it("WARN", function() {
-						return [ "XMPP PROXY::Exception handling stanza:", stanza.toString(), ex.stack ];
-					});
-				}
-			});
-		}
-		catch (ex) {
-			// Eat the exception.
-			dutil.log_it("ERROR", "XMPP PROXY::_on_data:Incomplete packet parsed");
-		}
-
-		if (stream_terminated) {
-			dutil.log_it("DEBUG", "XMPP PROXY::Stream terminated by the server");
-			this.terminate();
-		}
-
-		// For debugging
-		// this._sock.destroy();
-	}, 
-
-	_on_close: function(had_error) {
-		had_error = had_error || false;
-		dutil.log_it("WARN", "XMPP PROXY::CLOSE event:had_error:", had_error);
-		this.emit('close', had_error, this._void_star);
-	}
+    _on_lookup_error: function(error) {
+        log.warn("%s %s _on_lookup_error - %s", this._void_star.session.sid, this._void_star.name, error);
+        this._close_connection(error);
+    }
 });

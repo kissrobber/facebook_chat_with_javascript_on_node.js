@@ -24,21 +24,26 @@
  */
 
 
-var bosh  = require('./bosh.js');
-var dutil = require('./dutil.js');
-var xpc   = require('./xmpp-proxy-connector.js');
-var xp    = require('./xmpp-proxy.js');
-var ls    = require('./lookup-service.js');
-var us    = require('underscore');
+var bosh      = require('./bosh.js');
+var websocket = require('./websocket.js');
+var dutil     = require('./dutil.js');
+var xpc       = require('./xmpp-proxy-connector.js');
+var xp        = require('./xmpp-proxy.js');
+var ls        = require('./lookup-service.js');
+var us        = require('underscore');
+var path      = require('path');
 
+var filename  = "[" + path.basename(path.normalize(__filename)) + "]";
+var logger    = require('./log.js');
+var log       = logger.getLogger(filename);
 
-exports.bosh      = bosh;
-exports.connector = xpc;
-exports.proxy     = xp;
-exports.lookup    = ls;
-exports.dutil     = dutil;
-exports.start     = function(options) {
+exports.bosh       = bosh;
+exports.connector  = xpc;
+exports.proxy      = xp;
+exports.lookup     = ls;
+exports.dutil      = dutil;
 
+exports.start_bosh = function(options) {
 	options = options || { };
 	options = dutil.extend(options, {
 		path: /^\/http-bind(\/+)?$/, 
@@ -46,12 +51,12 @@ exports.start     = function(options) {
 		logging: "INFO"
 	});
 
-	dutil.set_log_level(options.logging);
+	logger.set_log_level(options.logging);
 
 	// Instantiate a bosh server with the connector as a parameter.
 	var bosh_server = bosh.createServer(options);
 
-	dutil.log_it("DEBUG", "Starting the BOSH server");
+	log.trace("Starting the BOSH server");
 
 	// The connector is responsible for communicating with the real XMPP server.
 	// We allow different types of connectors to exist.
@@ -72,12 +77,25 @@ exports.start     = function(options) {
 	//
 
 	// Example:
-	bosh_server.on('response-acknowledged', function(wrapped_response, state) {
+	bosh_server.on("response-acknowledged", function(wrapped_response, session) {
 		// What to do with this response??
-		dutil.log_it("DEBUG", function() {
-			return [ "XMPP PROXY CONNECTOR::Response Acknowledged:", wrapped_response.rid ];
-		});
+        log.trace("%s Response Acknowledged: %s", session.sid, wrapped_response.rid);
 	});
 
 	return bosh_server;
+};
+
+//
+// bosh_server: The bosh server instance returned by start_bosh
+//
+// webSocket: An optional reference to the 'websocket' module - in
+// case you need to provide your own proxy object
+//
+exports.start_websocket = function(bosh_server, webSocket) {
+	var ws_server = websocket.createServer(bosh_server, webSocket);
+
+	// The connector is responsible for communicating with the real XMPP server.
+	// We allow different types of connectors to exist.
+	var conn = new xpc.Connector(ws_server, { });
+    return ws_server;
 };

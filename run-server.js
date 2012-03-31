@@ -1,9 +1,6 @@
 #!/usr/bin/env node
 // -*-  tab-width:4  -*-
 
-
-console.log("test");
-
 /*
  * Copyright (c) 2011 Dhruv Matani
  * 
@@ -29,8 +26,10 @@ console.log("test");
 
 var fs   = require('fs');
 var path = require('path');
+var nxb  = require("./src/main.js");
 
-var BOSH_DEFAULT_CONFIG_PATH = 'bosh.js.conf';
+
+var BOSH_DEFAULT_CONFIG_PATH = './bosh.js.conf';
 
 
 function app_meta() {
@@ -52,6 +51,12 @@ function show_version() {
 	console.log(meta.name + ": BOSH server version " + meta.version);
 }
 
+function print_boxed_message(msg) {
+	var hr  = "+-" + nxb.dutil.repeat('-', msg.length).join('') + "-+";
+	console.log(hr);
+	console.log("| " + msg + " |");
+	console.log(hr);
+}
 
 function main() {
 	var opts = require('tav').set({
@@ -151,23 +156,24 @@ function main() {
 	}
 
 
+	print_boxed_message(nxb.dutil.sprintf("Starting BOSH server 'v%s' on 'http://%s:%s%s' at '%s'", 
+										  get_version(), server_options.host, server_options.port, 
+										  server_options.path, new Date())
+					   );
 
-	var nxb    = require("./src/main.js");
-	//require("node-xmpp-bosh"); 
+	var bosh_server = nxb.start_bosh(server_options);
 
-	var msg = nxb.dutil.sprintf("Starting BOSH server 'v%s' on 'http://%s:%s%s' at '%s'", 
-								get_version(), server_options.host, server_options.port, 
-								server_options.path, new Date());
-	var hr  = "+-" + nxb.dutil.repeat('-', msg.length).join('') + "-+";
-	console.log(hr);
-	console.log("| " + msg + " |");
-	console.log(hr);
+	print_boxed_message(nxb.dutil.sprintf("Starting WEBSOCKET server 'v%s' on ws://%s:%s' at '%s'", 
+										  get_version(), 
+                                          server_options.host, 
+                                          server_options.port, 
+										  new Date())
+					   );
 
-	var server = nxb.start(server_options);
-
+	var ws_server   = nxb.start_websocket(bosh_server);
 }
 
 // Go!!
 main();
 
-// server.stop();
+// bosh_server.stop();

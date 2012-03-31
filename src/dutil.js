@@ -144,16 +144,25 @@ function copy(dest, src, restrict) {
 	return dest;
 }
 
-function extend(dest, src) {
+function extend(dest, src, restrict) {
 	/* Extend the hash 'dest' with keys & values from the 
 	 * hash 'src'. If a key is already present in 'dest', 
-	 * don't overrite it with one from 'src'.
+	 * don't overrite it with one from 'src'. If 'restrict' is an
+	 * array of strings, only override keys that match a string in
+	 * 'restrict'.
 	 */
 	var k;
 	for (k in src) {
 		if (src.hasOwnProperty(k)) {
 			if (!dest.hasOwnProperty(k)) {
-				dest[k] = src[k];
+			    if (restrict) {
+				    if (restrict.indexOf(k) !== -1) {
+					    dest[k] = src[k];
+				    }
+                }
+			    else {
+                    dest[k] = src[k];
+			    }
 			}
 		}
 	}
@@ -522,7 +531,7 @@ exports.sprintf            = sprintf;
 exports.sprintfd           = sprintfd;
 exports.rev_hash           = rev_hash;
 exports.xml_parse          = _xml_parse();
-exports.set_log_level      = set_log_level;
+exports.set_log_level      = require("./log.js").set_log_level;
 exports.log_it             = log_it;
 exports.json_parse         = json_parse;
 exports.jid_parse          = jid_parse;

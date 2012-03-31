@@ -1,7 +1,13 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ja" lang="ja" xmlns:og="http://ogp.me/ns#" xmlns:fb="http://www.facebook.com/2008/fbml">
 <head>
 <title>XMPP with JavaScript connect with Facebook Oauth</title>
-<script src='http://ajax.googleapis.com/ajax/libs/jquery/1.2.6/jquery.min.js'></script>
+<meta property="og:type" content="website" />
+<meta property="og:title" content="XMPP with JavaScript connect with Facebook Oauth" />
+<meta property="og:url" content="http://nodebosh.herokuapp.com/facebook.html" />
+<meta property="og:image" content="https://graph.facebook.com/kissrobber/picture?type=large" />
+<meta property="fb:app_id" content="232496826776523" />
+<meta property="og:description" content="XMPP with JavaScript connect with Facebook Oauth" />
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.7.1/jquery.min.js'></script>
 <script src='strophe.js'></script>
 <script src='facebook.js'></script>
 
@@ -84,18 +90,15 @@
 
 
 	function login() {
-				
 		FB.getLoginStatus(function(response) {
-		  if (response.session) {
+		  if (response.authResponse) {
 			connection.facebookConnect(
-				FB.getSession().uid + "@chat.facebook.com/test", 
+				response.authResponse.userId + "@chat.facebook.com/test", 
 				onConnect, 
 				60,
 				1, 
-				'3bf5d007a01f87a456240dd3f665803b',
-				null,
-				FB.getSession().session_key);
-				
+				FB._apiKey,
+				response.authResponse.accessToken);
 			FB.api('/me/friends', function(response) {
 				var to = $("#to");
 				to.empty();
@@ -110,73 +113,12 @@
 		});
 	}
 
-/**
- * Override to hide app secret.
- */
-Strophe.Connection.prototype._sasl_challenge1_fb = function (elem)
-    {
-        var challenge = Base64.decode(Strophe.getText(elem));
-        var nonce = "";
-        var method = "";
-        var version = "";
-
-        // remove unneeded handlers
-        this.deleteHandler(this._sasl_failure_handler);
-
-        var challenges = explode("&", challenge);
-        for(i=0; i<challenges.length; i++) 
-        {
-        	map = explode("=", challenges[i]);
-        	switch (map[0]) 
-        	{
-        		case "nonce":
-        			nonce = map[1];
-        			break;
-        		case "method":
-        			method = map[1];
-        			break;
-        		case "version":
-        			version = map[1];
-        			break;
-          }
-        }
-
-        var responseText = "";
-        
-        responseText += 'api_key=' + this.apiKey;
-        responseText += '&call_id=' + (Math.floor(new Date().getTime()/1000));
-        responseText += '&method=' + method;
-        responseText += '&nonce=' + nonce;
-        responseText += '&session_key=' + this.sessionKey;
-        responseText += '&v=' + '1.0';
-        
-        var this_ = this;
-		$.get('/sasl_challenge1_fb', {'data':responseText.replace(/&/g,"")}, function(data) {
-	        responseText += '&sig=' + data;
-	        
-	        this_._sasl_challenge_handler = this_._addSysHandler(
-	            this_._sasl_challenge2_cb.bind(this_), null,
-	            "challenge", null, null);
-	        this_._sasl_success_handler = this_._addSysHandler(
-	            this_._sasl_success_cb.bind(this_), null,
-	            "success", null, null);
-	        this_._sasl_failure_handler = this_._addSysHandler(
-	            this_._sasl_failure_cb.bind(this_), null,
-	            "failure", null, null);
-	        
-	        this_.send($build('response', {
-	            xmlns: Strophe.NS.SASL
-	        }).t(Base64.encode(responseText)).tree());
-		});
-        return false;
-};
-
-
 </script>
 </head>
 <body>
 	<h1>XMPP with JavaScript connect with Facebook Oauth(node-xmpp-bosh + strophe.js)</h1>
-	<fb:login-button perms="xmpp_login" on-login="login()"></fb:login-button>
+	<fb:login-button scope="xmpp_login" on-login="login()"></fb:login-button>
+	<fb:like></fb:like>
 	<div id='login' style='text-align: center'>
 		<label for='to'>
 			to:
@@ -209,7 +151,7 @@ Strophe.Connection.prototype._sasl_challenge1_fb = function (elem)
   (function() {
 		var e = document.createElement('script');
 		e.async = true;
-		e.src = document.location.protocol + '//connect.facebook.net/ja_JP/all.js';
+		e.src = document.location.protocol + '//connect.facebook.net/en_US/all.js';
 		document.getElementById('fb-root').appendChild(e);
   }());
 </script>
